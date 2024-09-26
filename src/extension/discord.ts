@@ -1,58 +1,88 @@
-import type { NodeCG } from "../../../../types/server";
+import type { NodeCG } from "./nodecg";
 
-import { joinVoiceChannel } from "@discordjs/voice";
-
-import { Client, Intents, Snowflake } from "discord.js";
-import { VoiceTrack } from "../@types/discord";
-const options = {
-  intents: [
-    Intents.FLAGS.GUILDS,
-    Intents.FLAGS.GUILD_VOICE_STATES
-  ]
-};
-const client = new Client(options);
-
+import { Client } from "discord-streamkit-rpc";
 
 export default async (nodecg: NodeCG) => {
-  const discordRep = nodecg.Replicant("discord");
+	const speakingRep = nodecg.Replicant("speakers", { defaultValue: [] });
 
-  const config = nodecg.bundleConfig.discord;
+	const config = nodecg.bundleConfig;
 
-  client.once("ready", (client) => {
-    const guild = client.guilds.cache.get(config.guild);
-    if (!guild) return;
-    const voiceChannel = guild.channels.cache.get(config.voiceTrack);
-    if (!voiceChannel) return;
-    const connection = joinVoiceChannel({
-      guildId: guild.id,
-      channelId: voiceChannel.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: true
-    });
-    const sendVoiceState = (state: "start" | "end", userId: Snowflake) => {
-      const data: VoiceTrack = {
-        state,
-        userId
-      };
-      discordRep.value = data;
-    }
-    connection.receiver.speaking.on("start", userId => {
-      sendVoiceState("start", userId);
-    });
-    connection.receiver.speaking.on("end", userId => {
-      sendVoiceState("end", userId);
-    });
-    client.options.presence = {
-      activities: [
-        {
-          name: config.stream.name,
-          type: "STREAMING",
-          url: config.stream.url
-        }
-      ]
-    };
-  });
+	const clientId = config.discord?.clientId!;
+	const clientSecret = config.discord?.clientSecret!;
+	const channel_id = config.discord?.channel_id;
+	if (!channel_id) return;
 
-  client.login(config.token);
+	const client = new Client();
+
+	client.on("ready", async () => {
+		const channel = await client.getChannel(channel_id);
+		speakingRep.value = channel.voice_states ?? [];
+		client.subscribe("VOICE_STATE_CREATE", { channel_id });
+		client.subscribe("VOICE_STATE_DELETE", { channel_id });
+		client.subscribe("VOICE_STATE_UPDATE", { channel_id });
+		client.subscribe("SPEAKING_START", { channel_id });
+		client.subscribe("SPEAKING_STOP", { channel_id });
+	});
+
+	client.on("VOICE_STATE_CREATE", (data) => {
+		speakingRep.value = [
+			{ speaking: false, ...data },
+			...(speakingRep.value ?? []),
+		];
+	});
+	client.on("VOICE_STATE_DELETE", (data) => {
+		speakingRep.value = (speakingRep.value ?? []).filter(
+			(d) => d.user.id !== data.user.id,
+		);
+	});
+	client.on("VOICE_STATE_UPDATE", (data) => {
+		let contains = false;
+		speakingRep.value = (speakingRep.value ?? []).map((d) => {
+			if (d.user.id === data.user.id) {
+				contains = true;
+				return Object.assign(d, data);
+			} else {
+				return d;
+			}
+		});
+		if (!contains)
+			speakingRep.value = [
+				{ speaking: false, ...data },
+				...(speakingRep.value ?? []),
+			];
+	});
+
+	client.on("SPEAKING_START", (data) => {
+		speakingRep.value = (speakingRep.value ?? []).map((d) => {
+			if (d.user.id === data.user_id) {
+				return {
+					...d,
+					speaking: true,
+				};
+			} else {
+				return d;
+			}
+		});
+	});
+	client.on("SPEAKING_STOP", (data) => {
+		speakingRep.value = (speakingRep.value ?? []).map((d) => {
+			if (d.user.id === data.user_id) {
+				return {
+					...d,
+					speaking: false,
+				};
+			} else {
+				return d;
+			}
+		});
+	});
+
+	if (clientId && clientSecret) {
+		client.login({ clientId, clientSecret, prompt: "none" });
+	} else {
+		console.error(
+			"使用可能な clientId, clientSecret が設定されていないため、デフォルトの設定でDiscordに接続します",
+		);
+		client.streamkit();
+	}
 };

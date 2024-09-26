@@ -1,14 +1,40 @@
-import { render } from "solid-js/web";
+import type { FunctionComponent } from "react";
 
-import { Component } from "solid-js";
+import { useReplicant } from "../../use-replicant";
 
-import Layout from "./Layout";
+import Background from "./component/background";
+import Frame from "./component/frame";
+import Voice from "./component/voice";
 
-import "./css/style.css";
+import "../../common/css/splatnet.css";
+import styles from "./css/style.module.css";
 
-const App: Component = () => {
+const talkers = nodecg.bundleConfig.discord.speakers;
 
-  return <Layout />;
+const Component: FunctionComponent = () => {
+	const speakers = useReplicant("speakers") ?? [];
+
+	return (
+		<div className={styles["container"]}>
+			<div className={styles["background"]}>
+				<Background />
+			</div>
+			<div className={styles["voice"]}>
+				{speakers.reduce((acc, speaker) => {
+					const avatar = talkers[speaker.user.id];
+					if (avatar) {
+						acc.push(
+							<Voice key={speaker.user.id} speaker={speaker} avatar={avatar} />,
+						);
+					}
+					return acc;
+				}, [] as JSX.Element[])}
+			</div>
+			<div className={styles["frame"]}>
+				<Frame />
+			</div>
+		</div>
+	);
 };
 
-render(() => <App />, document.getElementById("root") as HTMLElement);
+export default Component;
